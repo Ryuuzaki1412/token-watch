@@ -1,5 +1,7 @@
-import { useCallback, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { checkForAppUpdate, downloadAndInstallUpdate, relaunchApp, type UpdateCheckOutcome } from "./lib/tauri";
+import type { Update } from "@tauri-apps/plugin-updater";
 import "./App.css";
 
 type ProviderId = "minimax";
@@ -64,13 +66,27 @@ type IconName =
   | "clock"
   | "layers"
   | "external"
-  | "trash";
+  | "trash"
+  | "download"
+  | "restart";
 
 type IconProps = {
   name: IconName;
   size?: number;
   strokeWidth?: number;
 };
+
+type UpdateFlowState =
+  | { kind: "closed" }
+  | { kind: "checking" }
+  | { kind: "upToDate" }
+  | { kind: "available"; update: Update; currentVersion: string; newVersion: string; notes: string | null }
+  | { kind: "downloading"; update: Update; currentVersion: string; newVersion: string; downloaded: number; total: number | null }
+  | { kind: "ready"; update: Update; currentVersion: string; newVersion: string }
+  | { kind: "installing" }
+  | { kind: "error"; message: string };
+
+const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "0.0.0";
 
 const providerOptions: Array<{ id: ProviderId; label: string; detail: string }> = [
   { id: "minimax", label: "Minimax", detail: "Coding Plan" },
@@ -214,6 +230,21 @@ function Icon({ name, size = 18, strokeWidth = 1.8 }: IconProps) {
           <path d="M10 11v6M14 11v6" />
           <path d="M6 7v11a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7" />
           <path d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7" />
+        </svg>
+      );
+    case "download":
+      return (
+        <svg {...props}>
+          <path d="M12 4v12" />
+          <path d="m6 11 6 6 6-6" />
+          <path d="M5 20h14" />
+        </svg>
+      );
+    case "restart":
+      return (
+        <svg {...props}>
+          <path d="M3 12a9 9 0 1 0 3-6.7" />
+          <path d="M3 4v5h5" />
         </svg>
       );
   }
@@ -369,6 +400,136 @@ function ProviderForm({
   );
 }
 
+function UpdateModal({
+  flow,
+  onClose,
+  onDownload,
+  onRelaunch,
+}: {
+  flow: UpdateFlowState;
+  onClose: () => void;
+  onDownload: () => void;
+  onRelaunch: () => void;
+}) {
+  if (flow.kind === "closed") return null;
+
+  const dismissible = flow.kind !== "downloading" && flow.kind !== "installing";
+
+  const eyebrow = (() => {
+    switch (flow.kind) {
+      case "checking": return "CHECKING";
+      case "upToDate": return "UP TO DATE";
+      case "available": return "UPDATE AVAILABLE";
+      case "downloading": return "DOWNLOADING";
+      case "ready": return "READY TO RESTART";
+      case "installing": return "RESTARTING";
+      case "error": return "UPDATE ERROR";
+    }
+  })();
+
+  const title = (() => {
+    switch (flow.kind) {
+      case "checking": return "正在检查更新";
+      case "upToDate": return "已是最新版本";
+      case "available": return `发现新版本 v${flow.newVersion}`;
+      case "downloading": return `正在下载 v${flow.newVersion}`;
+      case "ready": return "已就绪,重启即可生效";
+      case "installing": return "正在重启…";
+      case "error": return "更新遇到问题";
+    }
+  })();
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && dismissible) onClose(); }}>
+      <section className="provider-modal update-modal" role="dialog" aria-modal="true" aria-labelledby="update-modal-title">
+        <div className="modal-header">
+          <div>
+            <span className="eyebrow">{eyebrow}</span>
+            <h2 id="update-modal-title">{title}</h2>
+          </div>
+          {dismissible && (
+            <button className="modal-close" type="button" onClick={onClose} aria-label="关闭">×</button>
+          )}
+        </div>
+
+        {flow.kind === "checking" && (
+          <p className="modal-description"><span className="spinner" style={{ borderTopColor: "var(--accent)" }} /> 正在联系 GitHub Releases,稍候…</p>
+        )}
+
+        {flow.kind === "upToDate" && (
+          <p className="modal-description">当前 v{APP_VERSION} 已经是最新版本,无需更新。</p>
+        )}
+
+        {flow.kind === "available" && (
+          <>
+            <p className="modal-description">当前版本 <strong>v{flow.currentVersion}</strong>,新版本 <strong>v{flow.newVersion}</strong>。</p>
+            {flow.notes && (
+              <div className="release-notes">
+                <div className="release-notes-label">Release Notes</div>
+                <div className="release-notes-body">{flow.notes}</div>
+              </div>
+            )}
+            <div className="form-actions confirm-actions">
+              <button className="button button-secondary" type="button" onClick={onClose}>稍后</button>
+              <button className="button button-primary" type="button" onClick={onDownload}>
+                <Icon name="download" size={14} />
+                <span>下载并安装</span>
+              </button>
+            </div>
+          </>
+        )}
+
+        {flow.kind === "downloading" && (() => {
+          const percent = flow.total && flow.total > 0 ? Math.min(100, Math.round((flow.downloaded / flow.total) * 100)) : 0;
+          const sizeLabel = (bytes: number) => {
+            if (bytes < 1024) return `${bytes} B`;
+            if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+            return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+          };
+          return (
+            <>
+              <p className="modal-description">
+                下载中… {sizeLabel(flow.downloaded)}
+                {flow.total ? ` / ${sizeLabel(flow.total)}` : ""}
+              </p>
+              <ProgressBar value={percent} tone="success" />
+            </>
+          );
+        })()}
+
+        {flow.kind === "ready" && (
+          <>
+            <p className="modal-description">v{flow.newVersion} 已下载完成并通过签名校验。点击重启后,应用会自动关闭并启动新版本。</p>
+            <div className="form-actions confirm-actions">
+              <button className="button button-secondary" type="button" onClick={onClose}>稍后重启</button>
+              <button className="button button-primary" type="button" onClick={onRelaunch}>
+                <Icon name="restart" size={14} />
+                <span>立即重启</span>
+              </button>
+            </div>
+          </>
+        )}
+
+        {flow.kind === "installing" && (
+          <p className="modal-description"><span className="spinner" style={{ borderTopColor: "var(--accent)" }} /> 正在准备重启…</p>
+        )}
+
+        {flow.kind === "error" && (
+          <>
+            <p className="modal-description form-error">
+              <Icon name="alert" size={15} />
+              <span>{flow.message}</span>
+            </p>
+            <div className="form-actions confirm-actions">
+              <button className="button button-secondary" type="button" onClick={onClose}>关闭</button>
+            </div>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function ProgressBar({ value, tone }: { value: number; tone: string }) {
   return (
     <div className="progress-track" aria-label={`${value}% 剩余`}>
@@ -457,6 +618,8 @@ function App() {
   const [welcomeDraft, setWelcomeDraft] = useState({ provider: "minimax" as ProviderId, connectionName: "", apiKey: "" });
   const [darkMode, setDarkMode] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  const [updateFlow, setUpdateFlow] = useState<UpdateFlowState>({ kind: "closed" });
+  const updateInFlight = useRef(false);
 
   const activeConnection = useMemo(
     () => connections.find((connection) => connection.id === activeId) ?? null,
@@ -696,6 +859,83 @@ function App() {
     setPendingDelete(null);
   };
 
+  const closeUpdate = () => {
+    if (updateFlow.kind === "downloading" || updateFlow.kind === "installing") return;
+    setUpdateFlow({ kind: "closed" });
+  };
+
+  const triggerUpdateCheck = useCallback(async () => {
+    if (updateInFlight.current) return;
+    updateInFlight.current = true;
+    setUpdateFlow({ kind: "checking" });
+    try {
+      const outcome: UpdateCheckOutcome = await checkForAppUpdate(APP_VERSION);
+      if (outcome.kind === "upToDate") {
+        setUpdateFlow({ kind: "upToDate" });
+      } else if (outcome.kind === "available") {
+        const newVersion = outcome.update.version ?? "latest";
+        const notes = outcome.update.body ?? null;
+        setUpdateFlow({
+          kind: "available",
+          update: outcome.update,
+          currentVersion: APP_VERSION,
+          newVersion,
+          notes,
+        });
+      } else {
+        setUpdateFlow({ kind: "error", message: outcome.message });
+      }
+    } finally {
+      updateInFlight.current = false;
+    }
+  }, []);
+
+  const runUpdateDownload = useCallback(async () => {
+    const current = updateFlow;
+    if (current.kind !== "available") return;
+    updateInFlight.current = true;
+    setUpdateFlow({
+      kind: "downloading",
+      update: current.update,
+      currentVersion: current.currentVersion,
+      newVersion: current.newVersion,
+      downloaded: 0,
+      total: null,
+    });
+    try {
+      let downloaded = 0;
+      await downloadAndInstallUpdate(current.update, (chunk, total) => {
+        downloaded += chunk;
+        setUpdateFlow((prev) =>
+          prev.kind === "downloading"
+            ? { ...prev, downloaded, total }
+            : prev,
+        );
+      });
+      setUpdateFlow({
+        kind: "ready",
+        update: current.update,
+        currentVersion: current.currentVersion,
+        newVersion: current.newVersion,
+      });
+    } catch (value) {
+      const message = value instanceof Error ? value.message : String(value);
+      setUpdateFlow({ kind: "error", message: `下载或安装失败：${message}` });
+    } finally {
+      updateInFlight.current = false;
+    }
+  }, [updateFlow]);
+
+  const triggerRelaunch = useCallback(async () => {
+    setUpdateFlow((prev) => (prev.kind === "ready" ? { kind: "installing" } : prev));
+    try {
+      await relaunchApp();
+    } catch (value) {
+      const message = value instanceof Error ? value.message : String(value);
+      setUpdateFlow({ kind: "error", message: `重启失败：${message}` });
+    }
+  }, []);
+
   const draftProvider = panelMode.kind === "closed" ? "minimax" : panelMode.draft.provider;
   const draftName = panelMode.kind === "closed" ? "" : panelMode.draft.connectionName;
   const draftApiKey = panelMode.kind === "closed" ? "" : panelMode.draft.apiKey;
@@ -793,7 +1033,7 @@ function App() {
 
         <div className="sidebar-footer">
           <div className="privacy-line"><Icon name="lock" size={14} /><span>Key 仅保存在当前会话</span></div>
-          <span className="version-label">Token Watch · 0.1</span>
+          <span className="version-label">Token Watch · v{APP_VERSION}</span>
         </div>
       </aside>
 
@@ -822,6 +1062,16 @@ function App() {
               aria-label={darkMode ? "切换浅色模式" : "切换暗色模式"}
             >
               <Icon name={darkMode ? "sun" : "moon"} size={17} />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              onClick={triggerUpdateCheck}
+              title="检查更新"
+              aria-label="检查更新"
+              disabled={updateFlow.kind === "checking" || updateFlow.kind === "downloading" || updateFlow.kind === "installing"}
+            >
+              <Icon name="download" size={16} />
             </button>
             <button className="topbar-provider" type="button" onClick={activeConnection ? openEditPanel : openAddPanelWithDraft}>
               <span className={`status-dot ${activeConnection ? "success" : "muted"}`} />
@@ -951,6 +1201,13 @@ function App() {
           </section>
         </div>
       )}
+
+      <UpdateModal
+        flow={updateFlow}
+        onClose={closeUpdate}
+        onDownload={runUpdateDownload}
+        onRelaunch={triggerRelaunch}
+      />
 
       {panelMode.kind !== "closed" && (
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closePanel(); }}>

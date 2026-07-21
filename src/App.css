@@ -1315,6 +1315,47 @@ select:focus-visible {
   opacity: 0.88;
 }
 
+.update-modal {
+  width: min(100%, 520px);
+}
+
+.update-modal .modal-description {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.update-modal .progress-track {
+  margin-top: 14px;
+}
+
+.release-notes {
+  max-height: 220px;
+  overflow: auto;
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.release-notes-label {
+  margin-bottom: 8px;
+  color: var(--text-subtle);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.release-notes-body {
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
