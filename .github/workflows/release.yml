@@ -126,27 +126,85 @@ jobs:
             | jq -r .id)
           echo "release id: $RELEASE_ID"
 
-          # GitHub normalizes spaces to dots on upload, so the actual asset
-          # name will be e.g. Token.Watch.app.tar.gz — NOT what we passed.
-          REAL_BUNDLE=$(curl -fsS \
+          # Find the .app.tar.gz asset uploaded by THIS workflow run. We can't
+          # filter by name alone (GitHub normalizes spaces and tauri-action may
+          # append an arch suffix like "_aarch64"), so match against what we
+          # just built: same byte count as the local .app.tar.gz.
+          LOCAL_BUNDLE='src-tauri/target/release/bundle/macos/Token Watch.app.tar.gz'
+          if [ ! -f "$LOCAL_BUNDLE" ]; then
+            echo "ERROR: local bundle not found at $LOCAL_BUNDLE"
+            exit 1
+          fi
+          LOCAL_SIZE=$(wc -c < "$LOCAL_BUNDLE" | tr -d ' ')
+          echo "local bundle size: $LOCAL_SIZE"
+
+          # Iterate assets, drop any .app.tar.gz that doesn't match our local
+          # size, then pick what remains.
+          mapfile -t ASSETS < <(curl -fsS \
             -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/$REPO/releases/tags/$TAG" \
-            | jq -r '.assets[] | select(.name | endswith(".app.tar.gz")) | .name' \
-            | head -1)
-          if [ -z "$REAL_BUNDLE" ]; then
+            | jq -c '.assets[] | select(.name | endswith(".app.tar.gz"))')
+
+          if [ "${#ASSETS[@]}" -eq 0 ]; then
             echo "ERROR: no .app.tar.gz asset found in release $TAG"
             exit 1
           fi
-          echo "real updater bundle: $REAL_BUNDLE"
 
-          # Sign file lives on the runner; tauri-action uploaded it
-          # alongside, so we just re-read it from the build output.
-          SIG_PATH='src-tauri/target/release/bundle/macos/Token Watch.app.tar.gz.sig'
-          if [ ! -f "$SIG_PATH" ]; then
-            echo "ERROR: signature file not found at $SIG_PATH"
+          # Find the asset that matches our local build's size
+          REAL_BUNDLE=""
+          for asset in "${ASSETS[@]}"; do
+            name=$(echo "$asset" | jq -r .name)
+            size=$(echo "$asset" | jq -r .size)
+            if [ "$size" = "$LOCAL_SIZE" ]; then
+              REAL_BUNDLE="$name"
+              break
+            fi
+          done
+
+          if [ -z "$REAL_BUNDLE" ]; then
+            echo "ERROR: no .app.tar.gz asset matches local build (size $LOCAL_SIZE)"
+            echo "  candidates on release:"
+            for asset in "${ASSETS[@]}"; do
+              echo "    - $(echo "$asset" | jq -r .name)  size=$(echo "$asset" | jq -r .size)"
+            done
             exit 1
           fi
-          SIG=$(cat "$SIG_PATH")
+          echo "real updater bundle (matched by size): $REAL_BUNDLE"
+
+          # Clean up: delete any other .app.tar.gz assets that don't match
+          # (stale bundles from previous runs with different arch / size).
+          for asset in "${ASSETS[@]}"; do
+            name=$(echo "$asset" | jq -r .name)
+            id=$(echo "$asset" | jq -r .id)
+            if [ "$name" != "$REAL_BUNDLE" ]; then
+              echo "==> Removing stale bundle $name (id $id)"
+              curl -fsS -X DELETE \
+                -H "Authorization: token $GH_TOKEN" \
+                "https://api.github.com/repos/$REPO/releases/assets/$id"
+            fi
+          done
+
+          # Also delete the matching .sig if there's an orphan old one (size
+          # doesn't match), then re-upload the new one.
+          LOCAL_SIG_PATH='src-tauri/target/release/bundle/macos/Token Watch.app.tar.gz.sig'
+          LOCAL_SIG_SIZE=$(wc -c < "$LOCAL_SIG_PATH" | tr -d ' ')
+          mapfile -t SIG_ASSETS < <(curl -fsS \
+            -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO/releases/tags/$TAG" \
+            | jq -c '.assets[] | select(.name | endswith(".app.tar.gz.sig"))')
+          for asset in "${SIG_ASSETS[@]}"; do
+            name=$(echo "$asset" | jq -r .name)
+            id=$(echo "$asset" | jq -r .id)
+            size=$(echo "$asset" | jq -r .size)
+            if [ "$size" != "$LOCAL_SIG_SIZE" ]; then
+              echo "==> Removing stale signature $name (id $id)"
+              curl -fsS -X DELETE \
+                -H "Authorization: token $GH_TOKEN" \
+                "https://api.github.com/repos/$REPO/releases/assets/$id"
+            fi
+          done
+
+          SIG=$(cat "$LOCAL_SIG_PATH")
           PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           URL="https://github.com/$REPO/releases/download/$TAG/$REAL_BUNDLE"
 
@@ -199,8 +257,10 @@ jobs:
             echo "ERROR: latest.json GET returned HTTP $STATUS"
             exit 1
           fi
-          jq -r '"  version: \(.version)\n  url    : \(.platforms.darwin-aarch64.url)\n  pub_date: \(.pub_date)"' /tmp/latest.json
-          URL=$(jq -r '.platforms.darwin-aarch64.url' /tmp/latest.json)
+          echo "  version : $(jq -r '.version' /tmp/latest.json)"
+          echo "  url     : $(jq -r '.platforms["darwin-aarch64"].url' /tmp/latest.json)"
+          echo "  pub_date: $(jq -r '.pub_date' /tmp/latest.json)"
+          URL=$(jq -r '.platforms["darwin-aarch64"].url' /tmp/latest.json)
           echo "==> Verifying bundle URL is reachable: $URL"
           HEAD=$(curl -sIL -o /dev/null -w '%{http_code}' "$URL")
           if [ "$HEAD" != "200" ] && [ "$HEAD" != "302" ]; then
