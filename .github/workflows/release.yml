@@ -1,0 +1,222 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.5.3). Leave empty to use the current HEAD.'
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build & publish release
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      # Resolved once, used by every step
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install jq
+        run: brew install jq
+
+      - name: Resolve tag
+        id: resolve
+        run: |
+          if [ -z "$TAG" ] || [ "$TAG" = "" ]; then
+            echo "TAG cannot be empty"
+            exit 1
+          fi
+          if [[ "$TAG" != v* ]]; then
+            echo "TAG must start with 'v' (got: $TAG)"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version & pin updater endpoint to current tag
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -e
+          # 1) version in tauri.conf.json
+          jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > _t.json && mv _t.json src-tauri/tauri.conf.json
+          # 2) version in package.json
+          jq --arg v "$VERSION" '.version = $v' package.json > _p.json && mv _p.json package.json
+          # 3) version in Cargo.toml
+          sed -i '' "s/^version = \".*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+          # 4) updater endpoint → pin to this exact release tag
+          jq --arg tag "$TAG" \
+            '.plugins.updater.endpoints = ["https://github.com/Ryuuzaki1412/token-watch/releases/download/" + $tag + "/latest.json"]' \
+            src-tauri/tauri.conf.json > _t.json && mv _t.json src-tauri/tauri.conf.json
+          # 5) show what we did
+          echo "::group::Bumped files"
+          echo "tauri.conf.json: version=$VERSION  endpoint=$(jq -r '.plugins.updater.endpoints[0]' src-tauri/tauri.conf.json)"
+          jq '{version, plugins: .plugins.updater}' src-tauri/tauri.conf.json
+          jq '.version' package.json
+          grep '^version' src-tauri/Cargo.toml
+          echo "::endgroup::"
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Build + sign + create draft release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ steps.resolve.outputs.tag }}
+          releaseName: 'Token Watch v__VERSION__'
+          releaseBody: |
+            See assets below.
+
+            ## Auto-update
+
+            Existing users (v1.5.2+) will be prompted via the in-app updater. The endpoint is pinned to this exact release tag, so no CDN-cache surprises.
+          releaseDraft: true
+          prerelease: false
+          # We generate latest.json ourselves below to avoid the %20 url-encoding
+          # bug that bit us in v1.5.1.
+          includeUpdaterJson: false
+
+      - name: Generate & upload latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          echo "==> Looking up release + assets for $TAG"
+          RELEASE_ID=$(curl -fsS \
+            -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO/releases/tags/$TAG" \
+            | jq -r .id)
+          echo "release id: $RELEASE_ID"
+
+          # GitHub normalizes spaces to dots on upload, so the actual asset
+          # name will be e.g. Token.Watch.app.tar.gz — NOT what we passed.
+          REAL_BUNDLE=$(curl -fsS \
+            -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO/releases/tags/$TAG" \
+            | jq -r '.assets[] | select(.name | endswith(".app.tar.gz")) | .name' \
+            | head -1)
+          if [ -z "$REAL_BUNDLE" ]; then
+            echo "ERROR: no .app.tar.gz asset found in release $TAG"
+            exit 1
+          fi
+          echo "real updater bundle: $REAL_BUNDLE"
+
+          # Sign file lives on the runner; tauri-action uploaded it
+          # alongside, so we just re-read it from the build output.
+          SIG_PATH='src-tauri/target/release/bundle/macos/Token Watch.app.tar.gz.sig'
+          if [ ! -f "$SIG_PATH" ]; then
+            echo "ERROR: signature file not found at $SIG_PATH"
+            exit 1
+          fi
+          SIG=$(cat "$SIG_PATH")
+          PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          URL="https://github.com/$REPO/releases/download/$TAG/$REAL_BUNDLE"
+
+          cat > latest.json <<EOF
+          {
+            "version": "$VERSION",
+            "notes": "Token Watch v$VERSION. See release notes for details.",
+            "pub_date": "$PUB_DATE",
+            "platforms": {
+              "darwin-aarch64": {
+                "signature": "$SIG",
+                "url": "$URL"
+              }
+            }
+          }
+          EOF
+
+          echo "==> latest.json"
+          cat latest.json
+          jq -e . latest.json > /dev/null
+
+          # Replace any prior latest.json on this release
+          EXISTING=$(curl -fsS \
+            -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO/releases/tags/$TAG" \
+            | jq -r '.assets[] | select(.name=="latest.json") | .id' || true)
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            echo "==> Removing stale latest.json (asset id $EXISTING)"
+            curl -fsS -X DELETE \
+              -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/$REPO/releases/assets/$EXISTING"
+          fi
+
+          echo "==> Uploading latest.json"
+          curl -fsS -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @latest.json \
+            "https://uploads.github.com/repos/$REPO/releases/$RELEASE_ID/assets?name=latest.json" \
+            | jq -r '"uploaded: \(.name)  size=\(.size)  state=\(.state)"'
+
+      - name: Smoke test updater endpoint
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          echo "==> Verifying /releases/download/$TAG/latest.json"
+          STATUS=$(curl -sLo /tmp/latest.json -w '%{http_code}' \
+            "https://github.com/Ryuuzaki1412/token-watch/releases/download/$TAG/latest.json")
+          if [ "$STATUS" != "200" ]; then
+            echo "ERROR: latest.json GET returned HTTP $STATUS"
+            exit 1
+          fi
+          jq -r '"  version: \(.version)\n  url    : \(.platforms.darwin-aarch64.url)\n  pub_date: \(.pub_date)"' /tmp/latest.json
+          URL=$(jq -r '.platforms.darwin-aarch64.url' /tmp/latest.json)
+          echo "==> Verifying bundle URL is reachable: $URL"
+          HEAD=$(curl -sIL -o /dev/null -w '%{http_code}' "$URL")
+          if [ "$HEAD" != "200" ] && [ "$HEAD" != "302" ]; then
+            echo "ERROR: bundle URL returned HTTP $HEAD"
+            exit 1
+          fi
+          echo "OK"
+
+      - name: Commit version bump back to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "[email protected]"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "Nothing to commit (already bumped?)"
+          else
+            git commit -m "chore(release): bump to ${{ steps.resolve.outputs.tag }}"
+            git push
+          fi
