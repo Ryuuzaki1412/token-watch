@@ -197,17 +197,18 @@ jobs:
           $ASSETS_JSON
           EOF
 
-          # Same for .sig
+          # Same for .sig. Use name match (don't trust size — minisign output
+          # can coincidentally be the same length across builds).
           SIG_ASSETS_JSON=$(curl -fsS \
             -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/$REPO/releases/tags/$TAG" \
             | jq -c '.assets[] | select(.name | endswith(".app.tar.gz.sig"))')
+          EXPECTED_SIG_NAME="Token.Watch_aarch64.app.tar.gz.sig"
           while IFS= read -r asset; do
             [ -z "$asset" ] && continue
             name=$(echo "$asset" | jq -r .name)
             id=$(echo "$asset" | jq -r .id)
-            size=$(echo "$asset" | jq -r .size)
-            if [ "$size" != "$LOCAL_SIG_SIZE" ]; then
+            if [ "$name" != "$EXPECTED_SIG_NAME" ]; then
               echo "==> Removing stale signature $name (id $id)"
               curl -fsS -X DELETE \
                 -H "Authorization: token $GH_TOKEN" \
