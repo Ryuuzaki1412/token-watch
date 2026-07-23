@@ -1,7 +1,8 @@
-import { useCallback, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { checkForAppUpdate, downloadAndInstallUpdate, relaunchApp, type UpdateCheckOutcome } from "./lib/tauri";
 import type { Update } from "@tauri-apps/plugin-updater";
+import { LazyStore } from "@tauri-apps/plugin-store";
 import "./App.css";
 
 type ProviderId = "minimax";
@@ -609,6 +610,7 @@ function ModelUsageCard({ model }: { model: ModelRemain }) {
 }
 
 function App() {
+  const [ready, setReady] = useState(false);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [keyVisible, setKeyVisible] = useState(false);
@@ -620,6 +622,55 @@ function App() {
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const [updateFlow, setUpdateFlow] = useState<UpdateFlowState>({ kind: "closed" });
   const updateInFlight = useRef(false);
+  const storeRef = useRef<LazyStore | null>(null);
+
+  // ── 启动:从磁盘 store 读回上次会话的连接 / 激活项 / 主题 ──────────────
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const store = new LazyStore("settings.json", { autoSave: true });
+        await store.init();
+        storeRef.current = store;
+
+        const [storedConnections, storedActiveId, storedDark] = await Promise.all([
+          store.get<Connection[]>("connections"),
+          store.get<string | null>("activeId"),
+          store.get<boolean>("darkMode"),
+        ]);
+
+        if (cancelled) return;
+        if (Array.isArray(storedConnections)) setConnections(storedConnections);
+        if (storedActiveId !== undefined && storedActiveId !== null) setActiveId(storedActiveId);
+        if (typeof storedDark === "boolean") setDarkMode(storedDark);
+        setReady(true);
+      } catch (value) {
+        // 加载失败(首装 / 文件损坏) → 用空状态启动
+        if (cancelled) return;
+        setError(`无法读取本地设置:${value instanceof Error ? value.message : String(value)}`);
+        setReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // ── 持久化:连接 / 激活项 / 主题变化就写回 store ────────────────────────
+  useEffect(() => {
+    if (!ready) return;
+    storeRef.current?.set("connections", connections);
+  }, [connections, ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    storeRef.current?.set("activeId", activeId);
+  }, [activeId, ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    storeRef.current?.set("darkMode", darkMode);
+  }, [darkMode, ready]);
 
   const activeConnection = useMemo(
     () => connections.find((connection) => connection.id === activeId) ?? null,
@@ -954,6 +1005,23 @@ function App() {
   const dashboardEyebrowName = activeConnection
     ? activeConnection.name
     : "CODING PLAN";
+
+  if (!ready) {
+    return (
+      <div className={`app-shell splash${darkMode ? " dark" : ""}`}>
+        <div className="splash-screen" role="status" aria-live="polite">
+          <div className="splash-mark" aria-hidden="true">
+            <Icon name="layers" size={28} strokeWidth={1.7} />
+          </div>
+          <div className="splash-copy">
+            <strong>Token Watch</strong>
+            <span className="splash-line" />
+            <span className="splash-hint">正在加载本地设置…</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`app-shell${darkMode ? " dark" : ""}`}>
