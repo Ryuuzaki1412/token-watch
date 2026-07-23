@@ -287,6 +287,8 @@ jobs:
 
       - name: Commit version bump back to main
         run: |
+          # Tag-triggered checkouts leave the runner in detached HEAD, which a
+          # bare `git push` refuses. Push the current commit explicitly to main.
           git config user.name "github-actions[bot]"
           git config user.email "[email protected]"
           git add -A
@@ -294,5 +296,5 @@ jobs:
             echo "Nothing to commit (already bumped?)"
           else
             git commit -m "chore(release): bump to ${{ steps.resolve.outputs.tag }}"
-            git push
+            git push origin HEAD:main
           fi
