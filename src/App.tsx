@@ -659,17 +659,17 @@ function App() {
   // ── 持久化:连接 / 激活项 / 主题变化就写回 store ────────────────────────
   useEffect(() => {
     if (!ready) return;
-    storeRef.current?.set("connections", connections);
+    storeRef.current?.set("connections", connections).catch(() => {});
   }, [connections, ready]);
 
   useEffect(() => {
     if (!ready) return;
-    storeRef.current?.set("activeId", activeId);
+    storeRef.current?.set("activeId", activeId).catch(() => {});
   }, [activeId, ready]);
 
   useEffect(() => {
     if (!ready) return;
-    storeRef.current?.set("darkMode", darkMode);
+    storeRef.current?.set("darkMode", darkMode).catch(() => {});
   }, [darkMode, ready]);
 
   const activeConnection = useMemo(
