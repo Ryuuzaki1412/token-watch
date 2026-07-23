@@ -90,7 +90,7 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
-      - name: Build + sign + create draft release
+      - name: Build + sign + create release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -105,7 +105,9 @@ jobs:
             ## Auto-update
 
             Existing users (v1.5.2+) will be prompted via the in-app updater. The endpoint is pinned to this exact release tag, so no CDN-cache surprises.
-          releaseDraft: true
+          # We must publish immediately, not draft — downstream `latest.json`
+          # step uses the releases/tags/:tag API which returns 404 for drafts.
+          releaseDraft: false
           prerelease: false
           # We generate latest.json ourselves below to avoid the %20 url-encoding
           # bug that bit us in v1.5.1.
