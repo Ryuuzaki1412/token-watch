@@ -1,11 +1,11 @@
 {
-  "version": "1.5.2",
-  "notes": "Token Watch v1.5.2. See release notes for details.",
-  "pub_date": "2026-07-22T05:20:29Z",
+  "version": "1.6.1",
+  "notes": "Token Watch v1.6.1. See release notes for details.",
+  "pub_date": "2026-07-23T04:52:11Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcTVYUmhuL3VvdlV6YVI0dlJaYlNzNWUwZExIZE1CaUV3NkNieFl1V3YxUzErU0hwTkFZeWR4RnFyU0VSdXloaTJ5VFZQZzBYSWx3WGhtMFJsa0tES1RpUkZBMEpJOUFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0Njk3NjI0CWZpbGU6VG9rZW4gV2F0Y2guYXBwLnRhci5negpSenA4a0I4WWNXOVpkYVJCWW1oUHhZNUczLzFFUTYrWE5jSU5vVmRFeDBycVRWVGJZTmdRaWhoUUlyZDBLbm4rRWdKREQxUFhLM3B2Qk1uL0hoNHdBdz09Cg==",
-      "url": "https://github.com/Ryuuzaki1412/token-watch/releases/download/v1.5.2/Token.Watch_aarch64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcTVYUmhuL3VvdlpSVkswaEJGS2dYVnFXQS9Kd1cwUjBONzFiT0xlTTBWRzVoT1pxeVpqZzZXTFdidXdNVkkyYXlYQTFtY0l3dnNvM044SXZxMm9hc3BxaUI2OSs5b1FJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0NzgyMzI3CWZpbGU6VG9rZW4gV2F0Y2guYXBwLnRhci5negpMT3RkMFBaRDh2U2lqY2E3NjVWdzJQSHhXN3Ivd1l5M0VVT3c3bWJjbmhveTMwZndmcUtDSE5NNW9jQTlwUzdnOUdTc0x4NkFDT2hyK0dQak5vZk1EUT09Cg==",
+      "url": "https://github.com/Ryuuzaki1412/token-watch/releases/download/v1.6.1/Token.Watch_aarch64.app.tar.gz"
     }
   }
 }
