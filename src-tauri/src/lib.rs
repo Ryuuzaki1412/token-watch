@@ -132,6 +132,12 @@ async fn fetch_token_plan(provider: String, api_key: String) -> Result<TokenPlan
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // tauri-plugin-updater pulls in reqwest + rustls with the
+    // `rustls-no-provider` feature, so we need to install a default
+    // CryptoProvider ourselves before any HTTPS request goes out,
+    // otherwise the updater fails with `error sending request`.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
