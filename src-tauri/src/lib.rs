@@ -2,6 +2,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+mod claude_stats;
+
 const MINIMAX_REMAINS_URL: &str = "https://api.minimaxi.com/v1/token_plan/remains";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -142,7 +144,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_store::Builder::default().build())
-        .invoke_handler(tauri::generate_handler![fetch_token_plan])
+        .invoke_handler(tauri::generate_handler![fetch_token_plan, claude_stats::fetch_claude_stats])
         .run(tauri::generate_context!())
         .expect("error while running token watch");
 }

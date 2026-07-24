@@ -1,6 +1,6 @@
 [package]
 name = "token-watch"
-version = "1.6.1"
+version = "1.7.0"
 description = "A quiet desktop dashboard for coding plan usage"
 authors = ["ryuuzaki1412"]
 edition = "2021"

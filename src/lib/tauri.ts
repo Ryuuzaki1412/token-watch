@@ -1,5 +1,6 @@
 import { check, type Update, type DownloadEvent } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { invoke } from "@tauri-apps/api/core";
 
 export type UpdateCheckOutcome =
   | { kind: "available"; update: Update }
@@ -35,4 +36,46 @@ export async function downloadAndInstallUpdate(
 
 export async function relaunchApp(): Promise<void> {
   await relaunch();
+}
+
+// ── Claude Code stats ────────────────────────────────────────────────────────
+
+export type ClaudeStatsRange = "all" | "7d" | "30d";
+
+export type ClaudeStats = {
+  totals: {
+    input: number;
+    output: number;
+    cacheCreate: number;
+    cacheRead: number;
+    grand: number;
+  };
+  sessions: number;
+  activeDays: number;
+  firstActivity: string;
+  lastActivity: string;
+  longestSession: { ms: number; display: string };
+  longestStreak: number;
+  currentStreak: number;
+  mostActiveDay: { date: string; tokens: number };
+  favoriteModel: string;
+  models: Array<{ name: string; tokens: number; percent: number }>;
+  range: string;
+  rangeTokens: number;
+  heatmap: {
+    weeks: number;
+    rows: HeatCell[][];
+    monthLabels: Array<{ startCol: number; endCol: number; label: string }>;
+  };
+};
+
+export type HeatCell = {
+  date: string | null;
+  tokens: number;
+  density: 0 | 1 | 2 | 3 | 4 | 5;
+  inRange: boolean;
+};
+
+export async function fetchClaudeStats(range: ClaudeStatsRange = "all"): Promise<ClaudeStats> {
+  return invoke<ClaudeStats>("fetch_claude_stats", { range });
 }

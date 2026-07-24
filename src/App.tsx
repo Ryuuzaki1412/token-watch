@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { checkForAppUpdate, downloadAndInstallUpdate, relaunchApp, type UpdateCheckOutcome } from "./lib/tauri";
+import { checkForAppUpdate, downloadAndInstallUpdate, fetchClaudeStats, relaunchApp, type ClaudeStats, type ClaudeStatsRange, type UpdateCheckOutcome } from "./lib/tauri";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import "./App.css";
@@ -49,6 +49,8 @@ type PanelMode =
   | { kind: "closed" }
   | { kind: "create"; draft: { provider: ProviderId; connectionName: string; apiKey: string } }
   | { kind: "edit"; id: string; draft: { provider: ProviderId; connectionName: string; apiKey: string } };
+
+type MainView = "overview" | "dashboard";
 
 type IconName =
   | "overview"
@@ -531,6 +533,245 @@ function UpdateModal({
   );
 }
 
+// ── Overview (Claude Code stats) ─────────────────────────────────────────────
+
+const HEAT_GLYPHS = ["·", "░", "▒", "▓", "█"] as const;
+
+function densityGlyph(density: number, inRange: boolean): string {
+  if (!inRange) return "·";
+  if (density <= 0) return "·";
+  return HEAT_GLYPHS[Math.min(density, HEAT_GLYPHS.length) - 1] ?? "·";
+}
+
+function densityTone(density: number, inRange: boolean): string {
+  if (!inRange) return "muted";
+  if (density <= 0) return "muted";
+  if (density >= 4) return "max";
+  if (density >= 3) return "high";
+  if (density >= 2) return "mid";
+  return "low";
+}
+
+function formatTokensShort(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+function formatTokensLong(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)} million`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+function pickComparison(grandTotal: number): { label: string; multiplier: number } {
+  // Approximate token counts for well-known books (round numbers).
+  const refs: Array<{ label: string; tokens: number }> = [
+    { label: "The Old Man and the Sea", tokens: 30_000 },
+    { label: "Of Mice and Men", tokens: 35_000 },
+    { label: "The Great Gatsby", tokens: 70_000 },
+    { label: "1984", tokens: 90_000 },
+    { label: "Pride and Prejudice", tokens: 120_000 },
+    { label: "Moby-Dick", tokens: 200_000 },
+    { label: "War and Peace", tokens: 560_000 },
+    { label: "Lord of the Rings trilogy", tokens: 1_100_000 },
+    { label: "the entire Wikipedia", tokens: 20_000_000_000 },
+  ];
+  let best = refs[0];
+  for (const r of refs) {
+    if (r.tokens <= grandTotal) best = r;
+  }
+  return { label: best.label, multiplier: Math.max(1, Math.round(grandTotal / best.tokens)) };
+}
+
+function OverviewView({
+  stats,
+  statsRange,
+  onRangeChange,
+  onReload,
+  loading,
+  error,
+}: {
+  stats: ClaudeStats | null;
+  statsRange: ClaudeStatsRange;
+  onRangeChange: (r: ClaudeStatsRange) => void;
+  onReload: () => void;
+  loading: boolean;
+  error: string;
+}) {
+  const { rows, monthLabels, weeks } = stats?.heatmap ?? { rows: [], monthLabels: [], weeks: 0 };
+
+  const headerLine = (() => {
+    if (!weeks) return "";
+    const line = new Array(weeks).fill("·");
+    for (const span of monthLabels) {
+      const start = Math.min(span.startCol, line.length - 1);
+      // Replace header markers with the month name starting at startCol.
+      // Render the month label characters into consecutive positions.
+      const chars = span.label.padEnd(Math.max(1, span.endCol - span.startCol + 1), " ").split("");
+      for (let i = 0; i < chars.length && start + i < line.length; i++) {
+        line[start + i] = chars[i] ?? " ";
+      }
+    }
+    return "    " + line.join("") + "    ";
+  })();
+
+  const rowLines = [0, 2, 4].map((rowIdx) => {
+    const label = ["Mon ", "Wed ", "Fri "][rowIdx / 2] ?? "    ";
+    const cells = rows[rowIdx] ?? [];
+    return label + cells.map((c) => densityGlyph(c.density, c.inRange)).join("");
+  });
+
+  const comparison = stats ? pickComparison(stats.totals.grand) : null;
+
+  return (
+    <section className="overview-view">
+      <div className="page-heading">
+        <div>
+          <span className="eyebrow">CLAUDE CODE · LOCAL STATS</span>
+          <h1>用量概览</h1>
+          <p>读取 <code>~/.claude/projects/**/*.jsonl</code> 算出来的本地统计。会随 Claude Code 使用自动增长。</p>
+        </div>
+        <div className="overview-actions">
+          <div className="overview-range" role="tablist" aria-label="时间范围">
+            {(["all", "7d", "30d"] as const).map((r) => (
+              <button
+                key={r}
+                role="tab"
+                aria-selected={statsRange === r}
+                className={`overview-range-tab${statsRange === r ? " active" : ""}`}
+                type="button"
+                onClick={() => onRangeChange(r)}
+              >
+                {r === "all" ? "All time" : r === "7d" ? "Last 7 days" : "Last 30 days"}
+              </button>
+            ))}
+          </div>
+          <button className="icon-button" type="button" onClick={onReload} title="重新统计" aria-label="重新统计" disabled={loading}>
+            <Icon name="refresh" size={17} />
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="error-banner" role="alert">
+          <Icon name="alert" size={16} />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {!stats ? (
+        <div className="overview-loading">
+          <span className="spinner" />
+          读取 <code>~/.claude/projects/</code> 中…
+        </div>
+      ) : stats.totals.grand === 0 ? (
+        <div className="no-data-card">
+          <Icon name="alert" size={18} />
+          <span>在 <code>~/.claude/projects/</code> 没找到 Claude Code 的会话日志。先用 Claude Code 跑一个 session 再回来看看。</span>
+        </div>
+      ) : (
+        <>
+          <div className="overview-heatmap">
+            <pre className="overview-heatmap-pre" aria-label="按天 token 用量热图">
+              <span className="overview-heatmap-row overview-heatmap-months">{headerLine}</span>
+              {rowLines.map((line, i) => (
+                <span key={i} className="overview-heatmap-row">
+                  {Array.from(line).map((ch, j) => {
+                    if (j < 4) return <span key={j}>{ch === " " ? " " : ch}</span>;
+                    const cell = rows[i * 2]?.[j - 4];
+                    if (!cell) return <span key={j}>{ch}</span>;
+                    return (
+                      <span key={j} className={`heat-cell tone-${densityTone(cell.density, cell.inRange)}`} title={cell.date ? `${cell.date} · ${formatTokensLong(cell.tokens)} tokens` : ""}>
+                        {ch}
+                      </span>
+                    );
+                  })}
+                </span>
+              ))}
+            </pre>
+            <div className="overview-heatmap-legend">
+              <span>Less</span>
+              {HEAT_GLYPHS.map((g) => (
+                <span key={g} className="heat-cell tone-static">{g}</span>
+              ))}
+              <span>More</span>
+            </div>
+          </div>
+
+          <div className="overview-stats-grid">
+            <article className="overview-stat">
+              <span className="overview-stat-eyebrow">Favorite model</span>
+              <strong className="overview-stat-value">{stats.favoriteModel || "—"}</strong>
+              <span className="overview-stat-detail">最常用的模型</span>
+            </article>
+            <article className="overview-stat">
+              <span className="overview-stat-eyebrow">Total tokens</span>
+              <strong className="overview-stat-value">{formatTokensLong(stats.totals.grand)}</strong>
+              <span className="overview-stat-detail">
+                input {formatTokensShort(stats.totals.input)} · output {formatTokensShort(stats.totals.output)} · cache {formatTokensShort(stats.totals.cacheCreate + stats.totals.cacheRead)}
+              </span>
+            </article>
+            <article className="overview-stat">
+              <span className="overview-stat-eyebrow">Sessions</span>
+              <strong className="overview-stat-value">{stats.sessions}</strong>
+              <span className="overview-stat-detail">最近 {stats.firstActivity.slice(0, 10)} 起</span>
+            </article>
+            <article className="overview-stat">
+              <span className="overview-stat-eyebrow">Longest session</span>
+              <strong className="overview-stat-value">{stats.longestSession.display}</strong>
+              <span className="overview-stat-detail">单次最长对话</span>
+            </article>
+            <article className="overview-stat">
+              <span className="overview-stat-eyebrow">Active days</span>
+              <strong className="overview-stat-value">{stats.activeDays}</strong>
+              <span className="overview-stat-detail">有活动的天数</span>
+            </article>
+            <article className="overview-stat">
+              <span className="overview-stat-eyebrow">Longest streak</span>
+              <strong className="overview-stat-value">{stats.longestStreak} days</strong>
+              <span className="overview-stat-detail">连续活动最长</span>
+            </article>
+            <article className="overview-stat">
+              <span className="overview-stat-eyebrow">Most active day</span>
+              <strong className="overview-stat-value">{stats.mostActiveDay.date || "—"}</strong>
+              <span className="overview-stat-detail">{formatTokensShort(stats.mostActiveDay.tokens)} tokens</span>
+            </article>
+            <article className="overview-stat">
+              <span className="overview-stat-eyebrow">Current streak</span>
+              <strong className="overview-stat-value">{stats.currentStreak} days</strong>
+              <span className="overview-stat-detail">今天还在连续活动?</span>
+            </article>
+          </div>
+
+          <div className="overview-models">
+            <div className="overview-section-eyebrow">模型分布</div>
+            {stats.models.map((m) => (
+              <div key={m.name} className="overview-model-row">
+                <span className="overview-model-name">{m.name}</span>
+                <div className="overview-model-bar-track">
+                  <div className="overview-model-bar-fill" style={{ width: `${Math.max(2, m.percent)}%` }} />
+                </div>
+                <span className="overview-model-meta">
+                  {m.percent.toFixed(1)}% · {formatTokensShort(m.tokens)}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {comparison && stats.rangeTokens > 0 && (
+            <p className="overview-comparison">
+              在当前时间范围内你用了 ~<strong>{comparison.multiplier.toLocaleString()}×</strong>{" "}
+              <em>{comparison.label}</em> 的 tokens
+              <span className="overview-comparison-meta">（{formatTokensLong(stats.rangeTokens)} tokens）</span>
+            </p>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function ProgressBar({ value, tone }: { value: number; tone: string }) {
   return (
     <div className="progress-track" aria-label={`${value}% 剩余`}>
@@ -621,6 +862,12 @@ function App() {
   const [darkMode, setDarkMode] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const [updateFlow, setUpdateFlow] = useState<UpdateFlowState>({ kind: "closed" });
+  const [mainView, setMainView] = useState<MainView>("dashboard");
+  const [claudeStats, setClaudeStats] = useState<ClaudeStats | null>(null);
+  const [claudeStatsRange, setClaudeStatsRange] = useState<ClaudeStatsRange>("all");
+  const [claudeStatsLoading, setClaudeStatsLoading] = useState(false);
+  const [claudeStatsError, setClaudeStatsError] = useState("");
+  const claudeStatsReqId = useRef(0);
   const updateInFlight = useRef(false);
   const storeRef = useRef<LazyStore | null>(null);
 
@@ -915,6 +1162,36 @@ function App() {
     setUpdateFlow({ kind: "closed" });
   };
 
+  // ── Claude Code stats: 拉到本地 JSONL 算用量概览 ────────────────────────────
+  const loadClaudeStats = useCallback(async (range: ClaudeStatsRange = claudeStatsRange) => {
+    const reqId = ++claudeStatsReqId.current;
+    setClaudeStatsLoading(true);
+    setClaudeStatsError("");
+    try {
+      const next = await fetchClaudeStats(range);
+      if (reqId === claudeStatsReqId.current) {
+        setClaudeStats(next);
+      }
+    } catch (value) {
+      const message = value instanceof Error ? value.message : String(value);
+      if (reqId === claudeStatsReqId.current) {
+        setClaudeStatsError(`无法读取 Claude Code 数据：${message}`);
+      }
+    } finally {
+      if (reqId === claudeStatsReqId.current) {
+        setClaudeStatsLoading(false);
+      }
+    }
+  }, [claudeStatsRange]);
+
+  // 切到 overview 时自动拉一次,切换 range 时重拉
+  useEffect(() => {
+    if (!ready) return;
+    if (mainView === "overview" && !claudeStats) {
+      void loadClaudeStats(claudeStatsRange);
+    }
+  }, [ready, mainView, claudeStats, claudeStatsRange, loadClaudeStats]);
+
   const triggerUpdateCheck = useCallback(async () => {
     if (updateInFlight.current) return;
     updateInFlight.current = true;
@@ -1035,7 +1312,11 @@ function App() {
         </div>
 
         <nav className="primary-nav" aria-label="主导航">
-          <button className={`nav-item${activeConnection ? "" : " active"}`} type="button" onClick={activeConnection ? undefined : openAddPanelWithDraft}>
+          <button
+            className={`nav-item${mainView === "overview" ? " active" : ""}`}
+            type="button"
+            onClick={() => setMainView("overview")}
+          >
             <Icon name="overview" size={17} />
             <span>用量概览</span>
           </button>
@@ -1064,7 +1345,7 @@ function App() {
                       <button
                         className="provider-item-button"
                         type="button"
-                        onClick={() => setActiveId(connection.id)}
+                        onClick={() => { setActiveId(connection.id); setMainView("dashboard"); }}
                         title={`切换到 ${connection.name}`}
                       >
                         <span className="provider-symbol" title={providerLabel}>{providerLabel.slice(0, 1).toUpperCase() || "M"}</span>
@@ -1187,6 +1468,15 @@ function App() {
 
               <div className="security-note"><Icon name="lock" size={15} /><span>你的 API Key 只在本次运行期间保留，并通过本地 Rust 层请求 Minimax。</span></div>
             </section>
+          ) : mainView === "overview" ? (
+            <OverviewView
+              stats={claudeStats}
+              statsRange={claudeStatsRange}
+              onRangeChange={setClaudeStatsRange}
+              onReload={loadClaudeStats}
+              loading={claudeStatsLoading}
+              error={claudeStatsError}
+            />
           ) : (
             <section className="dashboard-view">
               <div className="page-heading">
