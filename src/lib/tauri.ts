@@ -40,7 +40,9 @@ export async function relaunchApp(): Promise<void> {
 
 // ── Claude Code stats ────────────────────────────────────────────────────────
 
-export type ClaudeStatsRange = "all" | "7d" | "30d";
+export type ClaudeStatsRange = "today" | "7d" | "30d";
+export type HeatmapMode = "daily" | "cumulative";
+export type TokenTotalsMode = "real" | "billable";
 
 export type ClaudeStats = {
   totals: {
@@ -48,9 +50,14 @@ export type ClaudeStats = {
     output: number;
     cacheCreate: number;
     cacheRead: number;
+    /** All tokens including cache reads — the "真实消耗" headline number. */
     grand: number;
+    /** input + output + cache_create — matches Claude Code's `/status`. */
+    billable: number;
   };
   sessions: number;
+  /** Count of assistant messages with non-zero usage (real API requests). */
+  messagesCount: number;
   activeDays: number;
   firstActivity: string;
   lastActivity: string;
@@ -76,6 +83,6 @@ export type HeatCell = {
   inRange: boolean;
 };
 
-export async function fetchClaudeStats(range: ClaudeStatsRange = "all"): Promise<ClaudeStats> {
+export async function fetchClaudeStats(range: ClaudeStatsRange = "today"): Promise<ClaudeStats> {
   return invoke<ClaudeStats>("fetch_claude_stats", { range });
 }

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { checkForAppUpdate, downloadAndInstallUpdate, fetchClaudeStats, relaunchApp, type ClaudeStats, type ClaudeStatsRange, type UpdateCheckOutcome } from "./lib/tauri";
+import { checkForAppUpdate, downloadAndInstallUpdate, fetchClaudeStats, relaunchApp, type ClaudeStats, type ClaudeStatsRange, type HeatmapMode, type TokenTotalsMode, type UpdateCheckOutcome } from "./lib/tauri";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import "./App.css";
@@ -535,23 +535,6 @@ function UpdateModal({
 
 // ── Overview (Claude Code stats) ─────────────────────────────────────────────
 
-const HEAT_GLYPHS = ["·", "░", "▒", "▓", "█"] as const;
-
-function densityGlyph(density: number, inRange: boolean): string {
-  if (!inRange) return "·";
-  if (density <= 0) return "·";
-  return HEAT_GLYPHS[Math.min(density, HEAT_GLYPHS.length) - 1] ?? "·";
-}
-
-function densityTone(density: number, inRange: boolean): string {
-  if (!inRange) return "muted";
-  if (density <= 0) return "muted";
-  if (density >= 4) return "max";
-  if (density >= 3) return "high";
-  if (density >= 2) return "mid";
-  return "low";
-}
-
 function formatTokensShort(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
@@ -584,11 +567,127 @@ function pickComparison(grandTotal: number): { label: string; multiplier: number
   return { label: best.label, multiplier: Math.max(1, Math.round(grandTotal / best.tokens)) };
 }
 
+function HeatmapCard({
+  heatmap,
+  mode,
+  onModeChange,
+}: {
+  heatmap: ClaudeStats["heatmap"];
+  mode: HeatmapMode;
+  onModeChange: (mode: HeatmapMode) => void;
+}) {
+  const densityRows = useMemo(() => {
+    const rows = heatmap.rows;
+    if (rows.length === 0) return [] as number[][];
+
+    if (mode === "daily") {
+      return rows.map((row) => row.map((cell) => cell.density));
+    }
+
+    // Cumulative: each cell's color is based on the running sum of tokens
+    // along its row (Mon..Sun of the same week), normalized by the row max.
+    return rows.map((row) => {
+      const total = row.reduce((acc, cell) => acc + cell.tokens, 0);
+      const norm = Math.max(total, 1);
+      let running = 0;
+      return row.map((cell) => {
+        running += cell.tokens;
+        if (running === 0) return 0;
+        const r = running / norm;
+        return Math.min(5, Math.max(1, Math.ceil(r * 5)));
+      });
+    });
+  }, [heatmap, mode]);
+
+  if (heatmap.weeks === 0) return null;
+
+  return (
+    <section className="heatmap-card" aria-label="Token 活动热图">
+      <header className="heatmap-header">
+        <h2>Token 活动</h2>
+        <div className="overview-toggle" role="tablist" aria-label="热图模式">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "daily"}
+            className={`overview-toggle-btn${mode === "daily" ? " active" : ""}`}
+            onClick={() => onModeChange("daily")}
+          >
+            每日
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "cumulative"}
+            className={`overview-toggle-btn${mode === "cumulative" ? " active" : ""}`}
+            onClick={() => onModeChange("cumulative")}
+          >
+            累计
+          </button>
+        </div>
+      </header>
+
+      <div
+        className="heatmap-months"
+        style={{ ["--cols" as string]: heatmap.weeks } as CSSProperties}
+      >
+        {heatmap.monthLabels.map((span, i) => (
+          <span
+            key={`${span.label}-${i}`}
+            className="heatmap-month-label"
+            style={{ gridColumn: `${span.startCol + 1} / span ${Math.max(1, span.endCol - span.startCol + 1)}` }}
+          >
+            {span.label}
+          </span>
+        ))}
+      </div>
+
+      <div
+        className="heatmap-grid"
+        style={{ ["--cols" as string]: heatmap.weeks } as CSSProperties}
+        role="grid"
+        aria-label={`${mode === "daily" ? "每日" : "累计"} token 用量`}
+      >
+        {densityRows.map((row, ri) =>
+          row.map((density, ci) => {
+            const cell = heatmap.rows[ri]?.[ci];
+            const dateLabel = cell?.date ?? "";
+            const tokenCount = cell?.tokens ?? 0;
+            return (
+              <div
+                key={`${ri}-${ci}`}
+                role="gridcell"
+                className={`heatmap-cell tone-${density}`}
+                data-date={dateLabel}
+                title={dateLabel ? `${dateLabel} · ${tokenCount.toLocaleString()} tokens` : ""}
+              />
+            );
+          }),
+        )}
+      </div>
+
+      <div className="heatmap-legend">
+        <span>少</span>
+        <div className="heatmap-legend-cells">
+          {[1, 2, 3, 4, 5].map((d) => (
+            <span key={d} className={`heatmap-cell tone-${d}`} aria-hidden="true" />
+          ))}
+        </div>
+        <span>多</span>
+      </div>
+    </section>
+  );
+}
+
 function OverviewView({
   stats,
   statsRange,
   onRangeChange,
   onReload,
+  heatmapMode,
+  onHeatmapModeChange,
+  tokenMode,
+  onTokenModeChange,
   loading,
   error,
 }: {
@@ -596,32 +695,13 @@ function OverviewView({
   statsRange: ClaudeStatsRange;
   onRangeChange: (r: ClaudeStatsRange) => void;
   onReload: () => void;
+  heatmapMode: HeatmapMode;
+  onHeatmapModeChange: (mode: HeatmapMode) => void;
+  tokenMode: TokenTotalsMode;
+  onTokenModeChange: (mode: TokenTotalsMode) => void;
   loading: boolean;
   error: string;
 }) {
-  const { rows, monthLabels, weeks } = stats?.heatmap ?? { rows: [], monthLabels: [], weeks: 0 };
-
-  const headerLine = (() => {
-    if (!weeks) return "";
-    const line = new Array(weeks).fill("·");
-    for (const span of monthLabels) {
-      const start = Math.min(span.startCol, line.length - 1);
-      // Replace header markers with the month name starting at startCol.
-      // Render the month label characters into consecutive positions.
-      const chars = span.label.padEnd(Math.max(1, span.endCol - span.startCol + 1), " ").split("");
-      for (let i = 0; i < chars.length && start + i < line.length; i++) {
-        line[start + i] = chars[i] ?? " ";
-      }
-    }
-    return "    " + line.join("") + "    ";
-  })();
-
-  const rowLines = [0, 2, 4].map((rowIdx) => {
-    const label = ["Mon ", "Wed ", "Fri "][rowIdx / 2] ?? "    ";
-    const cells = rows[rowIdx] ?? [];
-    return label + cells.map((c) => densityGlyph(c.density, c.inRange)).join("");
-  });
-
   const comparison = stats ? pickComparison(stats.totals.grand) : null;
 
   return (
@@ -634,7 +714,7 @@ function OverviewView({
         </div>
         <div className="overview-actions">
           <div className="overview-range" role="tablist" aria-label="时间范围">
-            {(["all", "7d", "30d"] as const).map((r) => (
+            {(["today", "7d", "30d"] as const).map((r) => (
               <button
                 key={r}
                 role="tab"
@@ -643,7 +723,7 @@ function OverviewView({
                 type="button"
                 onClick={() => onRangeChange(r)}
               >
-                {r === "all" ? "All time" : r === "7d" ? "Last 7 days" : "Last 30 days"}
+                {r === "today" ? "Today" : r === "7d" ? "Last 7 days" : "Last 30 days"}
               </button>
             ))}
           </div>
@@ -670,34 +750,13 @@ function OverviewView({
           <Icon name="alert" size={18} />
           <span>在 <code>~/.claude/projects/</code> 没找到 Claude Code 的会话日志。先用 Claude Code 跑一个 session 再回来看看。</span>
         </div>
-      ) : (
+) : (
         <>
-          <div className="overview-heatmap">
-            <pre className="overview-heatmap-pre" aria-label="按天 token 用量热图">
-              <span className="overview-heatmap-row overview-heatmap-months">{headerLine}</span>
-              {rowLines.map((line, i) => (
-                <span key={i} className="overview-heatmap-row">
-                  {Array.from(line).map((ch, j) => {
-                    if (j < 4) return <span key={j}>{ch === " " ? " " : ch}</span>;
-                    const cell = rows[i * 2]?.[j - 4];
-                    if (!cell) return <span key={j}>{ch}</span>;
-                    return (
-                      <span key={j} className={`heat-cell tone-${densityTone(cell.density, cell.inRange)}`} title={cell.date ? `${cell.date} · ${formatTokensLong(cell.tokens)} tokens` : ""}>
-                        {ch}
-                      </span>
-                    );
-                  })}
-                </span>
-              ))}
-            </pre>
-            <div className="overview-heatmap-legend">
-              <span>Less</span>
-              {HEAT_GLYPHS.map((g) => (
-                <span key={g} className="heat-cell tone-static">{g}</span>
-              ))}
-              <span>More</span>
-            </div>
-          </div>
+          <HeatmapCard
+            heatmap={stats.heatmap}
+            mode={heatmapMode}
+            onModeChange={onHeatmapModeChange}
+          />
 
           <div className="overview-stats-grid">
             <article className="overview-stat">
@@ -705,11 +764,59 @@ function OverviewView({
               <strong className="overview-stat-value">{stats.favoriteModel || "—"}</strong>
               <span className="overview-stat-detail">最常用的模型</span>
             </article>
-            <article className="overview-stat">
-              <span className="overview-stat-eyebrow">Total tokens</span>
-              <strong className="overview-stat-value">{formatTokensLong(stats.totals.grand)}</strong>
+            <article className="overview-stat overview-stat-tokens">
+              <div className="overview-stat-tokens-head">
+                <span className="overview-stat-eyebrow">Total tokens</span>
+                <div className="overview-toggle overview-toggle-sm" role="tablist" aria-label="Total tokens 取数口径">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={tokenMode === "real"}
+                    className={`overview-toggle-btn${tokenMode === "real" ? " active" : ""}`}
+                    onClick={() => onTokenModeChange("real")}
+                  >
+                    真实消耗
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={tokenMode === "billable"}
+                    className={`overview-toggle-btn${tokenMode === "billable" ? " active" : ""}`}
+                    onClick={() => onTokenModeChange("billable")}
+                  >
+                    账单消耗
+                  </button>
+                </div>
+              </div>
+              <strong className="overview-stat-value">
+                {formatTokensLong(tokenMode === "real" ? stats.totals.grand : stats.totals.billable)}
+              </strong>
               <span className="overview-stat-detail">
-                input {formatTokensShort(stats.totals.input)} · output {formatTokensShort(stats.totals.output)} · cache {formatTokensShort(stats.totals.cacheCreate + stats.totals.cacheRead)}
+                input {formatTokensShort(stats.totals.input)} · output {formatTokensShort(stats.totals.output)} · cache create {formatTokensShort(stats.totals.cacheCreate)} · cache read {formatTokensShort(stats.totals.cacheRead)}
+              </span>
+              <span className="overview-stat-detail">
+                {tokenMode === "real" ? "包含缓存命中(免费)" : "对齐 Claude Code /status"} ·{" "}
+                平均 {formatTokensShort(stats.messagesCount > 0 ? Math.round(stats.totals.grand / stats.messagesCount) : 0)} tokens / 请求
+              </span>
+            </article>
+            <article className="overview-stat">
+              <span className="overview-stat-eyebrow">Requests</span>
+              <strong className="overview-stat-value">{stats.messagesCount.toLocaleString()}</strong>
+              <span className="overview-stat-detail">
+                {stats.sessions} 个 session · 平均 {formatTokensShort(stats.messagesCount > 0 ? Math.round(stats.totals.grand / stats.messagesCount) : 0)} tokens / 请求
+              </span>
+            </article>
+            <article className="overview-stat">
+              <span className="overview-stat-eyebrow">Cache hit rate</span>
+              <strong className="overview-stat-value">
+                {(() => {
+                  const denom = stats.totals.cacheRead + stats.totals.input + stats.totals.cacheCreate;
+                  if (denom === 0) return "—";
+                  return `${((stats.totals.cacheRead / denom) * 100).toFixed(1)}%`;
+                })()}
+              </strong>
+              <span className="overview-stat-detail">
+                命中 {formatTokensShort(stats.totals.cacheRead)} / 输入 {formatTokensShort(stats.totals.input + stats.totals.cacheCreate)}
               </span>
             </article>
             <article className="overview-stat">
@@ -864,9 +971,11 @@ function App() {
   const [updateFlow, setUpdateFlow] = useState<UpdateFlowState>({ kind: "closed" });
   const [mainView, setMainView] = useState<MainView>("dashboard");
   const [claudeStats, setClaudeStats] = useState<ClaudeStats | null>(null);
-  const [claudeStatsRange, setClaudeStatsRange] = useState<ClaudeStatsRange>("all");
+  const [claudeStatsRange, setClaudeStatsRange] = useState<ClaudeStatsRange>("today");
   const [claudeStatsLoading, setClaudeStatsLoading] = useState(false);
   const [claudeStatsError, setClaudeStatsError] = useState("");
+  const [heatmapMode, setHeatmapMode] = useState<HeatmapMode>("daily");
+  const [tokenMode, setTokenMode] = useState<TokenTotalsMode>("real");
   const claudeStatsReqId = useRef(0);
   const updateInFlight = useRef(false);
   const storeRef = useRef<LazyStore | null>(null);
@@ -1163,32 +1272,43 @@ function App() {
   };
 
   // ── Claude Code stats: 拉到本地 JSONL 算用量概览 ────────────────────────────
-  const loadClaudeStats = useCallback(async (range: ClaudeStatsRange = claudeStatsRange) => {
+  const loadClaudeStats = useCallback((range: ClaudeStatsRange) => {
     const reqId = ++claudeStatsReqId.current;
     setClaudeStatsLoading(true);
     setClaudeStatsError("");
-    try {
-      const next = await fetchClaudeStats(range);
-      if (reqId === claudeStatsReqId.current) {
-        setClaudeStats(next);
+    (async () => {
+      try {
+        const next = await fetchClaudeStats(range);
+        if (reqId === claudeStatsReqId.current) {
+          setClaudeStats(next);
+        }
+      } catch (value) {
+        const message = value instanceof Error ? value.message : String(value);
+        if (reqId === claudeStatsReqId.current) {
+          setClaudeStatsError(`无法读取 Claude Code 数据：${message}`);
+        }
+      } finally {
+        if (reqId === claudeStatsReqId.current) {
+          setClaudeStatsLoading(false);
+        }
       }
-    } catch (value) {
-      const message = value instanceof Error ? value.message : String(value);
-      if (reqId === claudeStatsReqId.current) {
-        setClaudeStatsError(`无法读取 Claude Code 数据：${message}`);
-      }
-    } finally {
-      if (reqId === claudeStatsReqId.current) {
-        setClaudeStatsLoading(false);
-      }
-    }
-  }, [claudeStatsRange]);
+    })();
+  }, []);
 
-  // 切到 overview 时自动拉一次,切换 range 时重拉
+  const selectClaudeStatsRange = useCallback((range: ClaudeStatsRange) => {
+    setClaudeStatsRange(range);
+    loadClaudeStats(range);
+  }, [loadClaudeStats]);
+
+  const reloadClaudeStats = useCallback(() => {
+    loadClaudeStats(claudeStatsRange);
+  }, [loadClaudeStats, claudeStatsRange]);
+
+  // 切到 overview 时,如果还没数据就拉一次当前 range
   useEffect(() => {
     if (!ready) return;
     if (mainView === "overview" && !claudeStats) {
-      void loadClaudeStats(claudeStatsRange);
+      loadClaudeStats(claudeStatsRange);
     }
   }, [ready, mainView, claudeStats, claudeStatsRange, loadClaudeStats]);
 
@@ -1472,8 +1592,12 @@ function App() {
             <OverviewView
               stats={claudeStats}
               statsRange={claudeStatsRange}
-              onRangeChange={setClaudeStatsRange}
-              onReload={loadClaudeStats}
+              onRangeChange={selectClaudeStatsRange}
+              onReload={reloadClaudeStats}
+              heatmapMode={heatmapMode}
+              onHeatmapModeChange={setHeatmapMode}
+              tokenMode={tokenMode}
+              onTokenModeChange={setTokenMode}
               loading={claudeStatsLoading}
               error={claudeStatsError}
             />

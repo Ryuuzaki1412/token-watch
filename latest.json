@@ -1,11 +1,11 @@
 {
-  "version": "1.7.0",
-  "notes": "Token Watch v1.7.0. See release notes for details.",
-  "pub_date": "2026-07-24T13:02:36Z",
+  "version": "1.8.0",
+  "notes": "Token Watch v1.8.0\n\n• Total tokens 默认按「真实消耗」(含缓存命中)显示;新增「账单消耗」切换,对齐 Claude Code 的 /status\n• 新增 Requests 卡片:总请求数 + 平均 tokens/请求\n• 新增 Cache hit rate 卡片:缓存命中率 + 命中/输入拆分\n• Total tokens 卡片可切换口径\n\nToken Watch v1.8.0\n\n• Total tokens defaults to \"real consumption\" (including cache hits); new toggle for \"billed consumption\" matching Claude Code's /status\n• New Requests card: total requests + average tokens per request\n• New Cache hit rate card: cache hit percentage + hit/input breakdown\n• Total tokens card now has a mode toggle",
+  "pub_date": "2026-07-24T13:50:00Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcTVYUmhuL3VvdlhMOStPNWNLeVVzbU9XQ1dIUkR5Ui9qWVpxRVY3RS85N2hsM3oxdDZWWjJKZi9STW9uVTVkcHQrYWFXT3Z1Z1dtUEZkOWYyZk1Ebmx5S0VjcUZ4L1EwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODk4MTQ5CWZpbGU6VG9rZW4gV2F0Y2guYXBwLnRhci5negp0TmJJbUMrdWc0YVlTaGRLRFlyaE1ZQ2ZkUjdPdkVHUCtqYXE4c0xPdUtOemlwRzVjd1BuNHNOWFBvcmE2NlhmMmhUTEcweStDaStvenB0NmtPMG1EUT09Cg==",
-      "url": "https://github.com/Ryuuzaki1412/token-watch/releases/download/v1.7.0/Token.Watch_aarch64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcTVYUmhuL3VvdlFKYXVjY2NqajBWOUN6SlJKcVVkbEEyNDV0dmVESUJWQmhKejJXMGJ1aHpxdlpoaVFFYTF3T3VuNUw3VUFyczdaaFBhTlR3OVU4V2h3c1ZKZUhSR0FJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0OTAzNTMyCWZpbGU6VG9rZW4gV2F0Y2guYXBwLnRhci5negpPaTBZanArcUw5UjJsRlZUQWpzbXdBMHJlMmlqSmdmUHV6Y2VZUm5vZ05KLy90RWdpaU51eGtuc3R4L2lNWFZjcXdVWHBYeUZtNk5jbWpKc3dpZXlBQT09Cg==",
+      "url": "https://github.com/Ryuuzaki1412/token-watch/releases/download/v1.8.0/Token.Watch_aarch64.app.tar.gz"
     }
   }
 }

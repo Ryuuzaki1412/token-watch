@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Token Watch",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "identifier": "com.tokenwatch.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -50,7 +50,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/Ryuuzaki1412/token-watch/releases/download/v1.7.0/latest.json"
+        "https://github.com/Ryuuzaki1412/token-watch/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJEQThGQjlGNjE3NEU1MkEKUldRcTVYUmhuL3VvdmR2YWtLUng1OUNxeGh0RE4xNW9hU0Z6ckxOeGxNVW5hQWkzU1laeWxsK2gK",
       "windows": {

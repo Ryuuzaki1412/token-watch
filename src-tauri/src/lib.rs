@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 mod claude_stats;
+pub mod claude_stats_export {
+    pub use crate::claude_stats::*;
+}
 
 const MINIMAX_REMAINS_URL: &str = "https://api.minimaxi.com/v1/token_plan/remains";
 
