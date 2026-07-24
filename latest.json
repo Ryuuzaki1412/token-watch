@@ -1,10 +1,10 @@
 {
   "version": "1.8.0",
-  "notes": "Token Watch v1.8.0\n\n• Total tokens 默认按「真实消耗」(含缓存命中)显示;新增「账单消耗」切换,对齐 Claude Code 的 /status\n• 新增 Requests 卡片:总请求数 + 平均 tokens/请求\n• 新增 Cache hit rate 卡片:缓存命中率 + 命中/输入拆分\n• Total tokens 卡片可切换口径\n\nToken Watch v1.8.0\n\n• Total tokens defaults to \"real consumption\" (including cache hits); new toggle for \"billed consumption\" matching Claude Code's /status\n• New Requests card: total requests + average tokens per request\n• New Cache hit rate card: cache hit percentage + hit/input breakdown\n• Total tokens card now has a mode toggle",
-  "pub_date": "2026-07-24T13:50:00Z",
+  "notes": "Token Watch v1.8.0. See release notes for details.",
+  "pub_date": "2026-07-24T14:45:02Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcTVYUmhuL3VvdlFKYXVjY2NqajBWOUN6SlJKcVVkbEEyNDV0dmVESUJWQmhKejJXMGJ1aHpxdlpoaVFFYTF3T3VuNUw3VUFyczdaaFBhTlR3OVU4V2h3c1ZKZUhSR0FJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0OTAzNTMyCWZpbGU6VG9rZW4gV2F0Y2guYXBwLnRhci5negpPaTBZanArcUw5UjJsRlZUQWpzbXdBMHJlMmlqSmdmUHV6Y2VZUm5vZ05KLy90RWdpaU51eGtuc3R4L2lNWFZjcXdVWHBYeUZtNk5jbWpKc3dpZXlBQT09Cg==",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcTVYUmhuL3Vvdlo5RnpOSHBwbmFwWW9YTlBqWkY4RGFoTWtsNnROcDhjQVJ5MHBvNUxjT0lyWEdtOGpNQzM0bGVleTVRZUFQNGJiR25DU0RWMi8rWmdXMTVONjJQa1FzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0OTA0Mjk2CWZpbGU6VG9rZW4gV2F0Y2guYXBwLnRhci5negowKzYyNzVZNjI4YTY4aFUxbStlNXpOS0Y1NkZaNXBoM3dxOGVUL3d4d3JlRGpWakorZnFpbjFPdTFmSjBIVmwvMzY2a1BMbFU3ZU9OZWdKT3V0QnpDZz09Cg==",
       "url": "https://github.com/Ryuuzaki1412/token-watch/releases/download/v1.8.0/Token.Watch_aarch64.app.tar.gz"
     }
   }
