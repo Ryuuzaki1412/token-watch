@@ -262,6 +262,54 @@ jobs:
             "https://uploads.github.com/repos/$REPO/releases/$RELEASE_ID/assets?name=latest.json" \
             | jq -r '"uploaded: \(.name)  size=\(.size)  state=\(.state)"'
 
+      - name: Propagate latest.json to all older releases
+        # Each release pins its updater endpoint to its own tag, so users on
+        # v1.6.1 only ever hit `releases/download/v1.6.1/latest.json` — never
+        # the new release. To make the upgrade discoverable, mirror the same
+        # manifest (pointing at the new release's bundle + signature) onto
+        # every prior release's latest.json asset.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          echo "==> Fetching all releases..."
+          RELEASES_JSON=$(curl -fsS \
+            -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO/releases?per_page=100")
+
+          OLD_TAGS=$(echo "$RELEASES_JSON" | jq -r --arg NEW "$TAG" \
+            '.[] | select(.tag_name != $NEW) | .tag_name')
+
+          if [ -z "$OLD_TAGS" ]; then
+            echo "  no older releases, nothing to propagate."
+            exit 0
+          fi
+
+          for OLD in $OLD_TAGS; do
+            echo ""
+            echo "  --- propagating to $OLD ---"
+            REL_ID=$(echo "$RELEASES_JSON" \
+              | jq -r --arg t "$OLD" '.[] | select(.tag_name == $t) | .id')
+            OLD_LATEST_ID=$(echo "$RELEASES_JSON" \
+              | jq -r --arg t "$OLD" '.[] | select(.tag_name == $t) | .assets[] | select(.name == "latest.json") | .id')
+
+            if [ -n "$OLD_LATEST_ID" ] && [ "$OLD_LATEST_ID" != "null" ]; then
+              curl -fsS -X DELETE \
+                -H "Authorization: token $GH_TOKEN" \
+                "https://api.github.com/repos/$REPO/releases/assets/$OLD_LATEST_ID" \
+                -w "    delete old: HTTP %{http_code}\n"
+            fi
+
+            curl -fsS -X POST \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data-binary @latest.json \
+              "https://uploads.github.com/repos/$REPO/releases/$REL_ID/assets?name=latest.json" \
+              | jq -r '"    upload new: state=\(.state) size=\(.size)"'
+          done
+
       - name: Smoke test updater endpoint
         env:
           TAG: ${{ steps.resolve.outputs.tag }}
